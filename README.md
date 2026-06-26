@@ -35,8 +35,10 @@ chunks it used.
 
 ## Design decisions
 
-The interesting part of this project is the judgment behind it, not the line count. Each choice
-favors the simplest thing that proves the skill and keeps cost near zero while building locally.
+Every choice below optimizes for one constraint: the simplest component that satisfies the
+requirement, reaching for managed or heavyweight services only where the workload genuinely
+demands them. The decisions that are not load-bearing sit behind interfaces, so they can change
+later without disturbing the core.
 
 | Decision | Choice | Why | Also considered |
 |---|---|---|---|
@@ -57,7 +59,7 @@ store and no database, and lets pgvector be swapped without touching the RAG log
 Built local-first, then deployed to AWS. The MVP cut line is the end of Phase 6.
 
 - [x] **Phase 0** — project scaffold, CI green
-- [ ] **Phase 1** — HTTP server with `/health`
+- [x] **Phase 1** — HTTP server with `/health`
 - [ ] **Phase 2** — Postgres + pgvector running in Docker
 - [ ] **Phase 3** — `VectorStore` interface + pgvector implementation
 - [ ] **Phase 4** — `POST /ingest`: document to stored embeddings
