@@ -1,0 +1,24 @@
+# Local development stack. Runs the one backing service the app depends on
+# (Postgres + pgvector) in a container, so the Go service can run natively on
+# the host for a fast edit-run-debug loop and just dial localhost:5432.
+services:
+  db:
+    # Prebuilt Postgres 16 with the pgvector extension already compiled in, so
+    # we pull an image rather than installing and building the extension by hand.
+    image: pgvector/pgvector:pg16
+    environment:
+      # Password for the default 'postgres' superuser. Fine to hardcode: this
+      # database is local-only and disposable, never reachable from outside.
+      POSTGRES_PASSWORD: localdev
+      # Auto-create this database on first boot. Underscores, not hyphens:
+      # a hyphenated name would force double-quoting in every SQL statement.
+      POSTGRES_DB: go_rag_api
+    ports:
+      # Map host:container. A container is sealed by default; this pokes a hole
+      # so Go code on the laptop can reach Postgres at localhost:5432.
+      - "5432:5432"
+    volumes:
+      # Postgres runs any .sql file in this special directory the FIRST time the
+      # data volume initializes. Mounting migrations/ here applies the schema on
+      # boot, so 'docker compose up' gives us a fully migrated database.
+      - ./migrations:/docker-entrypoint-initdb.d
