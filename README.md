@@ -60,8 +60,8 @@ Built local-first, then deployed to AWS. The MVP cut line is the end of Phase 6.
 
 - [x] **Phase 0** — project scaffold, CI green
 - [x] **Phase 1** — HTTP server with `/health`
-- [ ] **Phase 2** — Postgres + pgvector running in Docker
-- [ ] **Phase 3** — `VectorStore` interface + pgvector implementation
+- [x] **Phase 2** — Postgres + pgvector running in Docker
+- [x] **Phase 3** — `VectorStore` interface + pgvector implementation
 - [ ] **Phase 4** — `POST /ingest`: document to stored embeddings
 - [ ] **Phase 5** — `POST /query`: grounded answer with sources
 - [ ] **Phase 6** — tests, full README, **MVP complete**
