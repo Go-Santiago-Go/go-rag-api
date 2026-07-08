@@ -62,7 +62,7 @@ Built local-first, then deployed to AWS. The MVP cut line is the end of Phase 6.
 - [x] **Phase 1** — HTTP server with `/health`
 - [x] **Phase 2** — Postgres + pgvector running in Docker
 - [x] **Phase 3** — `VectorStore` interface + pgvector implementation
-- [ ] **Phase 4** — `POST /ingest`: document to stored embeddings
+- [x] **Phase 4** — `POST /ingest`: document to stored embeddings
 - [ ] **Phase 5** — `POST /query`: grounded answer with sources
 - [ ] **Phase 6** — tests, full README, **MVP complete**
 - [ ] **Phase 7** — Terraform for S3, RDS, and IAM
@@ -88,6 +88,32 @@ go test ./...          # tests
 
 CI runs `go build`, `go vet`, and `go test` on every push and pull request, with the Go version
 sourced from `go.mod` so it lives in one place.
+
+## Endpoints
+
+### `POST /ingest`
+
+Makes a document searchable: chunk the text, embed each chunk with Bedrock Titan v2, and store the
+vectors in pgvector. Runs synchronously and returns `201 Created` once every chunk is stored.
+
+The service reads its database connection from `DATABASE_URL` (defaulting to the local
+`docker compose` Postgres) and calls Bedrock, so the machine running it needs AWS credentials with
+Bedrock access and the Titan v2 model enabled in the region.
+
+```bash
+docker compose up -d      # start local Postgres + pgvector; schema auto-applies on first boot
+go run ./cmd/server       # start the service on :8080
+
+curl -i -X POST localhost:8080/ingest \
+  -H 'Content-Type: application/json' \
+  -d '{"document_id":"doc-1","text":"pgvector stores embeddings inside Postgres."}'
+# HTTP/1.1 201 Created
+```
+
+Request body: `{ "document_id": string, "text": string }`. Both fields are required; a malformed or
+incomplete body returns `400`, and a Bedrock or database failure returns `500`.
+
+`POST /query` (grounded answer with sources) arrives in Phase 5.
 
 ## Writeups
 
