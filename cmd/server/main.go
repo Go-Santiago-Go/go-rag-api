@@ -41,16 +41,20 @@ func main() {
 		slog.Error("load aws config", "err", err)
 		os.Exit(1)
 	}
-	embedder := service.NewBedrockEmbedder(bedrockruntime.NewFromConfig(cfg))
+	bedrockClient := bedrockruntime.NewFromConfig(cfg)
+	embedder := service.NewBedrockEmbedder(bedrockClient)
+	generator := service.NewBedrockGenerator(bedrockClient)
 
 	// Inject the concrete embedder and store into the service, which only ever
 	// sees the Embedder and VectorStore interfaces.
 	ingestSvc := service.NewIngestService(embedder, pg)
+	querySvc := service.NewQueryService(embedder, pg, generator)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handler.Health())
 	// handler.Ingest closes the service into a route-shaped handler.
 	mux.HandleFunc("POST /ingest", handler.Ingest(ingestSvc))
+	mux.HandleFunc("POST /query", handler.Query(querySvc))
 
 	slog.Info("listening", "addr", ":8080")
 	// ListenAndServe blocks until it fails to serve; a non-nil return means the
