@@ -64,7 +64,7 @@ Built local-first, then deployed to AWS. The MVP cut line is the end of Phase 6.
 - [x] **Phase 3** — `VectorStore` interface + pgvector implementation
 - [x] **Phase 4** — `POST /ingest`: document to stored embeddings
 - [x] **Phase 5** — `POST /query`: grounded answer with sources
-- [ ] **Phase 6** — tests, full README, **MVP complete**
+- [x] **Phase 6** — tests, full README, **MVP complete**
 - [ ] **Phase 7** — Terraform for S3, RDS, and IAM
 - [ ] **Phase 8** — deployed on ECS Express Mode, live URL
 
