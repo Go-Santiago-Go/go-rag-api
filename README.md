@@ -63,7 +63,7 @@ Built local-first, then deployed to AWS. The MVP cut line is the end of Phase 6.
 - [x] **Phase 2** — Postgres + pgvector running in Docker
 - [x] **Phase 3** — `VectorStore` interface + pgvector implementation
 - [x] **Phase 4** — `POST /ingest`: document to stored embeddings
-- [ ] **Phase 5** — `POST /query`: grounded answer with sources
+- [x] **Phase 5** — `POST /query`: grounded answer with sources
 - [ ] **Phase 6** — tests, full README, **MVP complete**
 - [ ] **Phase 7** — Terraform for S3, RDS, and IAM
 - [ ] **Phase 8** — deployed on ECS Express Mode, live URL
@@ -113,7 +113,25 @@ curl -i -X POST localhost:8080/ingest \
 Request body: `{ "document_id": string, "text": string }`. Both fields are required; a malformed or
 incomplete body returns `400`, and a Bedrock or database failure returns `500`.
 
-`POST /query` (grounded answer with sources) arrives in Phase 5.
+### `POST /query`
+
+Answers a question about the ingested corpus: embed the question with the same Titan v2 model, retrieve
+the nearest chunks from pgvector by vector similarity, and have a Claude model write an answer
+constrained to those chunks. Returns `{ answer, sources[] }`, where each source is the chunk that
+backed the answer. Generation goes through the Bedrock Converse API, so the running machine also needs
+the Claude model enabled in the region (a one-time Anthropic use-case form per account gates first use).
+
+```bash
+curl -s -X POST localhost:8080/query \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"Where does pgvector store embeddings?"}'
+# { "answer": "pgvector stores embeddings inside Postgres.",
+#   "sources": [ { "content": "...", "document_id": "doc-1", "page": 1 } ] }
+```
+
+Request body: `{ "question": string }`. The question is required; a malformed body or empty question
+returns `400`, and a Bedrock or database failure returns `500`. The `sources[]` array is the contract
+that makes an answer auditable and gives a downstream agent structured data instead of prose.
 
 ## Writeups
 
