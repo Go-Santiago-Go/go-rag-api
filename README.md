@@ -33,6 +33,92 @@ A query is embedded with the same model, the nearest chunks are retrieved by vec
 those chunks are handed to an LLM that writes an answer grounded in them, returned with the source
 chunks it used.
 
+### Deployment (AWS, Phase 7–8)
+
+The service runs in a production-shaped three-tier VPC: a public tier for the load balancer and NAT,
+a private app tier for the container, and a private data tier for the database with no public
+endpoint. Traffic flows down through a chain of security groups, each tier trusting only the one
+above it; the app reaches Bedrock and ECR outbound through the NAT gateway.
+
+```mermaid
+flowchart TB
+    user([Client / Project 2 Agent])
+
+    subgraph cloud["☁️ AWS Cloud · us-east-1"]
+        bedrock["Amazon Bedrock<br/>Titan v2 · Claude Haiku"]
+        ecr[("ECR<br/>image")]
+        secrets["Secrets Manager<br/>DATABASE_URL"]
+
+        subgraph vpc["VPC · 10.0.0.0/16"]
+            igw{{"Internet Gateway"}}
+
+            subgraph pub["🌐 Public tier"]
+                direction LR
+                pubA["subnet · AZ-a<br/>10.0.0.0/24"]
+                alb(["Application<br/>Load Balancer<br/>:443"])
+                nat{{"NAT<br/>Gateway"}}
+                pubB["subnet · AZ-b<br/>10.0.1.0/24"]
+            end
+
+            subgraph app["🔒 Private app tier"]
+                direction LR
+                appA["subnet · AZ-a<br/>10.0.10.0/24"]
+                ecs["ECS Fargate<br/>go-rag-api :8080<br/>no public IP"]
+                appB["subnet · AZ-b<br/>10.0.11.0/24<br/>(scales here)"]
+            end
+
+            subgraph data["🔒 Private data tier"]
+                direction LR
+                dataA["subnet · AZ-a<br/>10.0.20.0/24"]
+                rds[("RDS Postgres 16<br/>pgvector<br/>publicly_accessible = false")]
+                dataB["subnet · AZ-b<br/>10.0.21.0/24<br/>(Multi-AZ standby · parked)"]
+            end
+        end
+    end
+
+    user ==>|HTTPS :443| igw ==> alb
+    alb ==>|SG chain :8080| ecs
+    ecs ==>|SG chain :5432| rds
+    ecs -->|egress| nat --> igw
+    nat -.->|InvokeModel| bedrock
+    nat -.->|image pull| ecr
+    ecs -.->|inject DSN| secrets
+
+    classDef public fill:#e8f4ff,stroke:#2b6cb0,color:#1a365d;
+    classDef private fill:#f0fff4,stroke:#276749,color:#22543d;
+    classDef dataTier fill:#fffaf0,stroke:#b7791f,color:#744210;
+    classDef ext fill:#2d3748,stroke:#4a5568,color:#fff;
+    class alb,nat,pubA,pubB public;
+    class ecs,appA,appB private;
+    class rds,dataA,dataB dataTier;
+    class bedrock,ecr,secrets ext;
+    linkStyle 0,1,2,3 stroke:#2b6cb0,stroke-width:3px;
+```
+
+The bold path traces a request: **Client → IGW → ALB → ECS → RDS**, each hop crossing a security
+group that trusts only the tier above. The thin dashed lines are the app's outbound calls: egress to
+Bedrock and ECR goes through the NAT gateway, and the DB connection string is injected from Secrets
+Manager. The greyed second-AZ slots (standby RDS, extra app capacity) are what production *scale*
+adds; the demo provisions the subnets but runs single-AZ.
+
+Single NAT and single-AZ RDS keep this demo cheap; production would run a NAT per AZ, Multi-AZ RDS,
+and VPC endpoints for the AWS services. Everything is torn down with `terraform destroy` after each
+session so nothing bills overnight.
+
+The `infra/` directory holds the Terraform for this stack (29 resources). From `infra/`:
+
+```bash
+terraform init      # download the AWS provider
+terraform plan      # preview the resources
+terraform apply     # build them (RDS takes ~5 min)
+terraform destroy   # tear it all down; run after every session
+```
+
+Credentials come from your AWS CLI configuration. The only always-on costs are the NAT gateway and
+the RDS instance, so a `destroy` after each session keeps the bill at pennies. The database password
+is never handed to Terraform: RDS generates it and stores it in Secrets Manager
+(`manage_master_user_password`), so it never lands in state.
+
 ## Design decisions
 
 Every choice below optimizes for one constraint: the simplest component that satisfies the
@@ -65,7 +151,7 @@ Built local-first, then deployed to AWS. The MVP cut line is the end of Phase 6.
 - [x] **Phase 4** — `POST /ingest`: document to stored embeddings
 - [x] **Phase 5** — `POST /query`: grounded answer with sources
 - [x] **Phase 6** — tests, full README, **MVP complete**
-- [ ] **Phase 7** — Terraform for S3, RDS, and IAM
+- [x] **Phase 7** — Terraform: three-tier VPC, private RDS, S3, and IAM (apply/destroy verified)
 - [ ] **Phase 8** — deployed on ECS Express Mode, live URL
 
 ## Stack

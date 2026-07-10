@@ -17,3 +17,13 @@ content
 # Planning docs: internal scaffolding for the build, not shipped artifacts.
 PROJECT1_BUILD_PLAN.md
 PROJECT2_BUILD_PLAN.md
+
+# Terraform: state can hold secrets and resource metadata (never commit it), and
+# .terraform/ caches large provider binaries. The .terraform.lock.hcl lock file
+# IS committed so provider versions stay reproducible.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
