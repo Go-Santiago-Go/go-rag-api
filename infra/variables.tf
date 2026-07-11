@@ -7,3 +7,9 @@ variable "aws_region" {
   type        = string
   default     = "us-east-1"
 }
+
+variable "github_repo" {
+  description = "GitHub repository (owner/name) allowed to assume the CI role via OIDC. Case-sensitive: must match the repo exactly as GitHub stores it, since it is matched against the token's `sub` claim."
+  type        = string
+  default     = "Go-Santiago-Go/go-rag-api"
+}
