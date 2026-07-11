@@ -21,32 +21,40 @@ generation), S3 (raw doc storage), Docker, Terraform, GitHub Actions to ECR, ECS
 Fargate.
 
 **Canonical name:** `go-rag-api`. Use it for the repo, the README title, and the Go module path
-(`github.com/<you>/go-rag-api`). Do not introduce alternate names.
+(`github.com/go-santiago-go/go-rag-api`). Do not introduce alternate names.
 
-## Status: pre-code
+## Status: built and deployed (Phase 8 complete)
 
-As of this writing the repo contains only planning docs. There is **no Go code, no `go.mod`, and no
-git repo yet**. The full phased build plan is in `PROJECT1_BUILD_PLAN.md` (phases 0 through 8);
-Phase 6 is the MVP cut line. `PROJECT2_BUILD_PLAN.md` describes the downstream agent. The commands
-and layout below are the *target* the plan builds toward. Create them as you implement each phase.
+The full service is implemented and has been deployed to AWS end to end: the `/ingest` and `/query`
+loop runs locally via `docker compose up`, tests pass in CI, and the container has been deployed on
+ECS Express Mode behind a live public URL that returns grounded `{ answer, sources[] }`. A separate
+downstream Strands agent (Project 2) consumes `/query` as a tool and is not built yet.
 
-## Target layout
+Because AWS resources are torn down after each session to avoid cost (`terraform destroy`), the
+public URL is regenerated per deploy rather than kept always-on. `DEPLOYMENT.md` is the full
+clone-and-deploy walkthrough.
+
+## Layout
 
 ```
-cmd/server/main.go      # entrypoint: wires dependencies, starts the server. Keep thin.
-internal/handler/       # HTTP handlers: parse request, call service, write response. No logic here.
-internal/service/       # RAG logic: chunk, embed, search, generate.
-internal/store/         # VectorStore interface plus pgvector implementation. Only place that knows SQL.
-migrations/             # SQL schema (e.g. 001_init.sql).
-infra/                  # Terraform (Phase 7+).
-docker-compose.yml      # local pgvector (pgvector/pgvector:pg16).
-Dockerfile              # multi-stage; distroless final image (Phase 8).
+cmd/server/main.go         # entrypoint: wires dependencies, starts the server. Thin.
+internal/handler/          # HTTP handlers: parse request, call service, write response. No logic here.
+internal/service/          # RAG logic: chunk, embed, search, generate.
+internal/store/            # VectorStore interface plus pgvector implementation. Only place that knows SQL.
+internal/store/schema.sql  # canonical schema, embedded in the binary and applied idempotently on startup.
+migrations/001_init.sql    # same schema, for the local docker-compose init hook.
+infra/                     # Terraform: the billable app stack (VPC, RDS, S3, ECS Express service).
+infra/bootstrap/           # Terraform: the free, persistent stack (ECR repo, GitHub OIDC CI role).
+docker-compose.yml         # local pgvector (pgvector/pgvector:pg16).
+Dockerfile                 # multi-stage; distroless final image.
+DEPLOYMENT.md              # how to clone and deploy to AWS.
+content/                   # gitignored personal writeups and drafts; not part of the shipped repo.
 ```
 
 Use Go's conventional layout: `cmd/` for the `main` entrypoint, `internal/` for app code the
 compiler forbids other modules from importing.
 
-## Commands (once code exists)
+## Commands
 
 ```bash
 go run ./cmd/server          # run the service (listens on :8080)
@@ -78,6 +86,36 @@ CI (`.github/workflows/ci.yml`) runs `go build`, `go vet`, and `go test` on push
 - **Testing.** Test pure logic (chunking) directly; test `/query` with a fake `VectorStore`
   implementation rather than a real DB. Prefer table-driven tests.
 - **Comments explain the *why*, not the *what*.** Document exported identifiers per Go convention.
+
+## Deployment (AWS) notes
+
+Non-obvious realities of the deployed setup, learned in Phase 8:
+
+- **Two Terraform stacks, split by lifetime.** `infra/bootstrap/` holds the free, long-lived pieces
+  (ECR repository, GitHub OIDC CI role) and stays up. `infra/` is the billable app stack (VPC, RDS,
+  S3, ECS Express service) and is destroyed after each session. The app stack looks the ECR repo up
+  by name with a `data` source, so `infra/bootstrap` must be applied first.
+- **DB connection resolves per environment.** Locally the app uses `DATABASE_URL` (docker-compose).
+  In the cloud there is no `DATABASE_URL`; the app reads the standard `PG*` vars, and ECS injects
+  `PGPASSWORD` from Secrets Manager at task launch. The password never enters the image or Terraform
+  state (RDS owns it via `manage_master_user_password`).
+- **The app self-migrates on startup.** `internal/store/schema.sql` is embedded and applied
+  idempotently (`IF NOT EXISTS`) because cloud RDS has no init hook and the distroless image has no
+  `psql`. Safe to run every boot.
+- **ECS Express Mode couples LB and task subnet placement into one subnet set.** To get a public URL
+  the tasks run in the *public* subnets (locked down by the app SG, which has no inbound rule except
+  the LB rule Express adds itself). The private app subnets and NAT from the three-tier design are
+  provisioned but off the request path. Dropping to hand-rolled `aws_ecs_service` is the escape hatch
+  if tasks must be fully private.
+- **Deploy by `:latest`, and beware a stale tag.** The classic failure is the running container
+  being an older image than the code, which crash-loops on `localhost`. Rebuild and re-push before
+  concluding config is wrong. CI also tags by git SHA for traceability.
+- **Teardown gotcha.** `terraform destroy` can hang: Express Mode deletes its gateway resource but
+  orphans its ALB, whose ENIs hold public IPs that block the internet gateway (and the whole VPC)
+  from deleting. If destroy times out on the Express service or the IGW, manually delete the orphaned
+  ALB (`ecs-express-gateway-alb-*`) and its `ecs-gateway-tg-*` target groups, then re-run destroy.
+  Also: pipe destroy output carefully; `terraform destroy | tee | tail` returns tail's exit code and
+  hides Terraform's real failure.
 
 ## Local-first, cloud-last
 

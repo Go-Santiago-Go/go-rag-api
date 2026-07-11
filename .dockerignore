@@ -11,7 +11,7 @@ infra/
 *.tfstate
 *.tfstate.backup
 
-# Local project instructions and planning docs — not needed to compile.
+# Local project instructions and planning docs (not needed to compile).
 CLAUDE.md
 CLAUDE.local.md
 PROJECT1_BUILD_PLAN.md
