@@ -1,4 +1,4 @@
-# infra/github_oidc.tf
+# infra/bootstrap/github_oidc.tf
 # Keyless CI auth: instead of storing a long-lived AWS access key in GitHub,
 # we federate GitHub's OIDC identity provider and let a workflow in THIS repo
 # assume a role scoped to exactly one action set (push to the ECR repo). The
@@ -11,8 +11,7 @@
 # The GitHub OIDC provider is an account-level singleton (one per issuer URL)
 # and already exists in this account, so we read it with a data source instead
 # of creating it. This avoids ownership conflicts and, importantly, means
-# `terraform destroy` on this stack will NOT remove a provider other stacks may
-# rely on.
+# `terraform destroy` will NOT remove a provider other stacks may rely on.
 data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
@@ -29,7 +28,7 @@ data "aws_iam_policy_document" "github_assume" {
       identifiers = [data.aws_iam_openid_connect_provider.github.arn]
     }
 
-    # The token's audience must be STS (mirrors client_id_list above).
+    # The token's audience must be STS (mirrors client_id_list on the provider).
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:aud"

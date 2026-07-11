@@ -1,6 +1,7 @@
-# infra/ecr.tf
+# infra/bootstrap/ecr.tf
 # The private container registry for the service image. CI builds the Docker
-# image and pushes it here; ECS Express Mode pulls it from here to run.
+# image and pushes it here; ECS Express Mode pulls it from here to run. Lives in
+# the persistent stack so images survive the app stack's nightly destroy.
 resource "aws_ecr_repository" "app" {
   name = "go-rag-api"
 
@@ -16,7 +17,6 @@ resource "aws_ecr_repository" "app" {
   }
 
   # Let `terraform destroy` delete the repo even if images remain inside.
-  # Same throwaway-demo reasoning as the S3 bucket's force_destroy.
   force_delete = true
 
   tags = { Name = "go-rag-api" }
