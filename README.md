@@ -1,6 +1,7 @@
 # go-rag-api
 
 [![ci](https://github.com/Go-Santiago-Go/go-rag-api/actions/workflows/ci.yml/badge.svg)](https://github.com/Go-Santiago-Go/go-rag-api/actions/workflows/ci.yml)
+[![deploy](https://github.com/Go-Santiago-Go/go-rag-api/actions/workflows/deploy.yml/badge.svg)](https://github.com/Go-Santiago-Go/go-rag-api/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **A production-shaped Retrieval Augmented Generation (RAG) service in Go, deployed on AWS.** It runs
