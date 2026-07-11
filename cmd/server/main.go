@@ -20,15 +20,33 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// DSN from the environment with a local default, so the same binary runs
-	// against docker-compose locally and RDS in the cloud with no code change;
-	// only DATABASE_URL differs.
-	dsn := getenv("DATABASE_URL", "postgres://postgres:localdev@localhost:5432/go_rag_api?sslmode=disable")
+	// Connection config resolves most-specific-first, so the same binary serves
+	// both environments:
+	//   1. DATABASE_URL set   -> use it verbatim (local dev / docker-compose).
+	//   2. PGHOST set, no URL  -> empty DSN; pgx then reads the standard PG*
+	//                             vars (PGHOST/PGUSER/PGPASSWORD/PGDATABASE/
+	//                             PGSSLMODE). This is the cloud path: ECS injects
+	//                             PGPASSWORD from Secrets Manager, never baking it
+	//                             into the image or Terraform state.
+	//   3. neither set         -> local default pointing at docker-compose.
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" && os.Getenv("PGHOST") == "" {
+		dsn = "postgres://postgres:localdev@localhost:5432/go_rag_api?sslmode=disable"
+	}
 	// NewPostgres pings on startup, so a bad DSN fails here rather than on the
 	// first request. A store we cannot reach is fatal: log and exit non-zero.
 	pg, err := store.NewPostgres(ctx, dsn)
 	if err != nil {
 		slog.Error("connect postgres", "err", err)
+		os.Exit(1)
+	}
+
+	// Apply the schema (idempotent) so a fresh RDS database becomes usable with
+	// no separate migration step; a no-op once the extension and table exist.
+	// Locally the docker-compose init hook already did this, so it is also a
+	// no-op there.
+	if err := pg.Migrate(ctx); err != nil {
+		slog.Error("migrate", "err", err)
 		os.Exit(1)
 	}
 
@@ -63,14 +81,4 @@ func main() {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
 	}
-}
-
-// getenv returns the value of key, or fallback when it is unset or empty. It
-// keeps the local default in one place so running with docker-compose needs no
-// environment setup while production overrides via the environment.
-func getenv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

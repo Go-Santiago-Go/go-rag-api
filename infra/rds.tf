@@ -8,10 +8,12 @@
 # Security groups (identities that chain by reference, not by IP)
 # ---------------------------------------------------------------------------
 
-# App security group: the identity the ECS task will carry (Phase 8). It has no
-# inbound rule yet; its "allow from the ALB" rule is added when the ALB exists.
-# We create it now because the DB security group below references it: the DB
-# grants access to "whoever holds this SG," not to an IP range that can drift.
+# App security group: the identity the ECS task carries. It deliberately has no
+# inbound rule of its own; ECS Express Mode adds the "allow from the load
+# balancer on the container port" rule itself when it provisions the ALB, so the
+# tasks stay unreachable from the internet even though they run in public
+# subnets. The DB security group below references this SG: the DB grants access
+# to "whoever holds this SG," not to an IP range that can drift.
 resource "aws_security_group" "app" {
   name        = "go-rag-api-app"
   description = "ECS task: outbound to Bedrock/RDS; inbound from ALB (added in Phase 8)"
@@ -79,8 +81,9 @@ resource "aws_db_instance" "vectors" {
   username = "raguser" # master user
 
   # Let RDS generate the master password and store it in Secrets Manager, so the
-  # secret never lives in Terraform state or a .tfvars file. Phase 8 reads it to
-  # build DATABASE_URL for the service.
+  # secret never lives in Terraform state or a .tfvars file. In Phase 8 ECS
+  # injects it into the container as PGPASSWORD from this secret at launch (see
+  # ecs.tf); the app assembles its connection from the PG* env vars.
   manage_master_user_password = true
 
   # Placement: private subnet group + DB security group = no public path in.

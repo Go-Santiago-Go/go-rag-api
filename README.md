@@ -12,12 +12,15 @@ Two endpoints, one service:
 - `POST /query` answers a question: embed it, similarity search the chunks, have an LLM write a
   cited answer, and return `{ answer, sources[] }`.
 
-> **Live demo:** coming in Phase 8 (deployed to AWS). Until then the full loop runs locally via
-> `docker compose up`. See the roadmap below for current status.
+> **Deployed:** the full service runs on AWS via ECS Express Mode. `terraform
+> apply` provisions the stack and outputs a public HTTPS URL; a `/query` against it returns grounded
+> `{ answer, sources[] }`, verified end to end (Bedrock embeddings + generation, pgvector in RDS).
+> The stack is torn down with `terraform destroy` after each session to avoid cost, so the URL is
+> regenerated per deploy rather than kept always-on.
 
 ## Architecture
 
-Target architecture (see the roadmap for what is built today):
+The service, end to end:
 
 ```mermaid
 flowchart LR
@@ -33,91 +36,125 @@ A query is embedded with the same model, the nearest chunks are retrieved by vec
 those chunks are handed to an LLM that writes an answer grounded in them, returned with the source
 chunks it used.
 
-### Deployment (AWS, Phase 7–8)
+### Deployment (AWS)
 
-The service runs in a production-shaped three-tier VPC: a public tier for the load balancer and NAT,
-a private app tier for the container, and a private data tier for the database with no public
-endpoint. Traffic flows down through a chain of security groups, each tier trusting only the one
-above it; the app reaches Bedrock and ECR outbound through the NAT gateway.
+The container runs on **Amazon ECS Express Mode**: from an image plus three IAM roles, Express Mode
+provisions the Fargate service, an internet-facing load balancer with TLS, autoscaling, health
+checks, and the security-group wiring between the load balancer and the tasks, and hands back a
+public `*.ecs.<region>.on.aws` URL. The data tier stays private: RDS Postgres has no public endpoint
+and accepts connections only from the app's security group.
 
 ```mermaid
 flowchart TB
-    user([Client / Project 2 Agent])
+    user(["Client / Agent · Internet"])
 
-    subgraph cloud["☁️ AWS Cloud · us-east-1"]
-        bedrock["Amazon Bedrock<br/>Titan v2 · Claude Haiku"]
-        ecr[("ECR<br/>image")]
-        secrets["Secrets Manager<br/>DATABASE_URL"]
+    subgraph vpc["Amazon VPC · 10.0.0.0/16 · Region us-east-1"]
+        direction TB
+        igw{{"Internet Gateway"}}
 
-        subgraph vpc["VPC · 10.0.0.0/16"]
-            igw{{"Internet Gateway"}}
+        subgraph web["🌐  WEB TIER · public subnets"]
+            direction LR
+            alb(["Application Load Balancer<br/>internet-facing"])
+            nat{{"NAT Gateway"}}
+        end
 
-            subgraph pub["🌐 Public tier"]
-                direction LR
-                pubA["subnet · AZ-a<br/>10.0.0.0/24"]
-                alb(["Application<br/>Load Balancer<br/>:443"])
-                nat{{"NAT<br/>Gateway"}}
-                pubB["subnet · AZ-b<br/>10.0.1.0/24"]
-            end
+        subgraph app["⚙️  APP TIER · private subnets"]
+            direction LR
+            taskA["ECS Fargate task<br/>go-rag-api :8080"]
+            taskB["ECS Fargate task<br/>go-rag-api :8080"]
+        end
 
-            subgraph app["🔒 Private app tier"]
-                direction LR
-                appA["subnet · AZ-a<br/>10.0.10.0/24"]
-                ecs["ECS Fargate<br/>go-rag-api :8080<br/>no public IP"]
-                appB["subnet · AZ-b<br/>10.0.11.0/24<br/>(scales here)"]
-            end
-
-            subgraph data["🔒 Private data tier"]
-                direction LR
-                dataA["subnet · AZ-a<br/>10.0.20.0/24"]
-                rds[("RDS Postgres 16<br/>pgvector<br/>publicly_accessible = false")]
-                dataB["subnet · AZ-b<br/>10.0.21.0/24<br/>(Multi-AZ standby · parked)"]
-            end
+        subgraph data["🗄️  DATABASE TIER · private subnets"]
+            direction LR
+            rds[("RDS PostgreSQL 16<br/>pgvector · primary")]
+            standby[("standby slot · parked<br/>Multi-AZ in prod")]
         end
     end
 
-    user ==>|HTTPS :443| igw ==> alb
-    alb ==>|SG chain :8080| ecs
-    ecs ==>|SG chain :5432| rds
-    ecs -->|egress| nat --> igw
-    nat -.->|InvokeModel| bedrock
-    nat -.->|image pull| ecr
-    ecs -.->|inject DSN| secrets
+    subgraph svc["Regional AWS services"]
+        direction LR
+        bedrock["Amazon Bedrock<br/>Titan v2 · Claude Haiku"]
+        ecr[("Amazon ECR")]
+        secrets["Secrets Manager<br/>RDS password"]
+    end
 
-    classDef public fill:#e8f4ff,stroke:#2b6cb0,color:#1a365d;
-    classDef private fill:#f0fff4,stroke:#276749,color:#22543d;
-    classDef dataTier fill:#fffaf0,stroke:#b7791f,color:#744210;
-    classDef ext fill:#2d3748,stroke:#4a5568,color:#fff;
-    class alb,nat,pubA,pubB public;
-    class ecs,appA,appB private;
-    class rds,dataA,dataB dataTier;
+    user ==>|"HTTPS 443"| igw
+    igw ==> alb
+    alb ==>|"8080"| taskA
+    alb ==>|"8080"| taskB
+    taskA ==>|"5432"| rds
+    taskB ==>|"5432"| rds
+    rds -.->|"replication (prod)"| standby
+    taskA -.->|"egress"| nat
+    nat -.-> bedrock
+    nat -.-> ecr
+    nat -.-> secrets
+
+    classDef ext fill:#232f3e,stroke:#ff9900,color:#ffffff;
+    classDef net fill:#e7f0fb,stroke:#1a73e8,color:#0b3d91;
+    classDef compute fill:#fdecd2,stroke:#ff9900,color:#7a4f01;
+    classDef db fill:#e7f4ea,stroke:#2e7d32,color:#1b5e20;
     class bedrock,ecr,secrets ext;
-    linkStyle 0,1,2,3 stroke:#2b6cb0,stroke-width:3px;
+    class igw,alb,nat net;
+    class taskA,taskB compute;
+    class rds,standby db;
+
+    style vpc fill:#f6f2fb,stroke:#7d3ac1,stroke-width:2px,color:#4a1d7a;
+    style web fill:#eaf6ea,stroke:#2e7d32,stroke-width:3px,color:#1b5e20;
+    style app fill:#e9f0fb,stroke:#1a73e8,stroke-width:3px,color:#0b3d91;
+    style data fill:#e6f4f4,stroke:#0f766e,stroke-width:3px,color:#0f4c47;
+    style svc fill:#fbfbfb,stroke:#bbbbbb,stroke-dasharray:2 2,color:#444444;
+
+    linkStyle 0,1,2,3,4,5 stroke:#ff9900,stroke-width:2px;
 ```
 
-The bold path traces a request: **Client → IGW → ALB → ECS → RDS**, each hop crossing a security
-group that trusts only the tier above. The thin dashed lines are the app's outbound calls: egress to
-Bedrock and ECR goes through the NAT gateway, and the DB connection string is injected from Secrets
-Manager. The greyed second-AZ slots (standby RDS, extra app capacity) are what production *scale*
-adds; the demo provisions the subnets but runs single-AZ.
+The orange path traces a request down the tiers: **Client → Internet Gateway → Application Load
+Balancer (web tier) → ECS task (app tier) → RDS (data tier)**, each hop crossing a security group
+that trusts only the tier above. The dashed lines are the app's outbound calls, which leave the
+private subnets through the NAT gateway: Bedrock for embeddings and generation, ECR for the image,
+and Secrets Manager for the DB password, which is injected into the container at launch (the app
+assembles its connection from `PG*` env vars, so the password is never in the image or Terraform
+state).
 
-Single NAT and single-AZ RDS keep this demo cheap; production would run a NAT per AZ, Multi-AZ RDS,
-and VPC endpoints for the AWS services. Everything is torn down with `terraform destroy` after each
-session so nothing bills overnight.
+**One honest trade-off (what the diagram idealizes).** The diagram shows the intended three-tier
+design. In practice, ECS Express Mode uses a single subnet set for both the load balancer and the
+tasks, so you cannot keep the tasks in the private app tier while the load balancer stays public. To
+get a public URL the tasks actually run in the public subnets; they have public IPs but stay
+unreachable from the internet because their security group has no inbound rule except the load
+balancer's. So the private app subnets and NAT gateway are provisioned but off the real request path.
+Keeping tasks fully private would mean dropping to a hand-rolled `aws_ecs_service`.
 
-The `infra/` directory holds the Terraform for this stack (29 resources). From `infra/`:
+Single-AZ RDS keeps this demo cheap; production would run Multi-AZ RDS and VPC endpoints for the AWS
+services. Everything is torn down with `terraform destroy` after each session so nothing bills
+overnight.
+
+The `infra/` directory holds two Terraform stacks, split by lifetime:
+
+- **`infra/bootstrap/`** provisions the free, long-lived pieces: the ECR repository and the GitHub
+  OIDC CI role. Apply it once and leave it up, so CI can push images at any time and images survive
+  the app stack's teardown.
+- **`infra/`** provisions the billable app stack (VPC, RDS, S3, and the ECS Express service). It
+  looks the ECR repository up by name, so the bootstrap stack must be applied first. This is the
+  stack you destroy after each session.
 
 ```bash
-terraform init      # download the AWS provider
-terraform plan      # preview the resources
-terraform apply     # build them (RDS takes ~5 min)
-terraform destroy   # tear it all down; run after every session
+# Once: the persistent stack (free: ECR repository + CI role)
+cd infra/bootstrap && terraform init && terraform apply
+
+# Each session: the billable app stack (about 10 to 15 min; RDS ~5 min, then
+# Express Mode waits for health checks)
+cd infra && terraform init && terraform apply
+terraform output service_url   # the live public URL
+terraform destroy              # tear the app stack down when done
 ```
 
-Credentials come from your AWS CLI configuration. The only always-on costs are the NAT gateway and
-the RDS instance, so a `destroy` after each session keeps the bill at pennies. The database password
-is never handed to Terraform: RDS generates it and stores it in Secrets Manager
-(`manage_master_user_password`), so it never lands in state.
+Credentials come from your AWS CLI configuration. The always-on costs while up are the RDS instance,
+the NAT gateway, and the Express load balancer, so a `destroy` after each session keeps the bill at
+pennies. The database password is never handed to Terraform: RDS generates it and stores it in
+Secrets Manager (`manage_master_user_password`), so it never lands in state.
+
+For a step by step clone and deploy walkthrough (Bedrock model access, both stacks, pushing an image,
+testing the URL, and teardown), see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Design decisions
 
@@ -140,19 +177,19 @@ a `VectorStore` interface (plus embedder and generator interfaces), and the conc
 (pgvector, Bedrock) are plugged in at `main`. That is what lets the service be tested with a fake
 store and no database, and lets pgvector be swapped without touching the RAG logic.
 
-## Status & roadmap
+## Status
 
-Built local-first, then deployed to AWS. The MVP cut line is the end of Phase 6.
+Built local-first, then deployed to AWS. Everything below is done and verified end to end:
 
-- [x] **Phase 0** — project scaffold, CI green
-- [x] **Phase 1** — HTTP server with `/health`
-- [x] **Phase 2** — Postgres + pgvector running in Docker
-- [x] **Phase 3** — `VectorStore` interface + pgvector implementation
-- [x] **Phase 4** — `POST /ingest`: document to stored embeddings
-- [x] **Phase 5** — `POST /query`: grounded answer with sources
-- [x] **Phase 6** — tests, full README, **MVP complete**
-- [x] **Phase 7** — Terraform: three-tier VPC, private RDS, S3, and IAM (apply/destroy verified)
-- [ ] **Phase 8** — deployed on ECS Express Mode, live URL
+- [x] HTTP server with `/health`
+- [x] Postgres + pgvector running locally in Docker
+- [x] `VectorStore` interface with a pgvector implementation
+- [x] `POST /ingest`: document chunked, embedded, and stored
+- [x] `POST /query`: grounded answer with structured sources
+- [x] Meaningful tests running in CI (build, vet, test)
+- [x] Terraform for a three-tier VPC, private RDS, S3, and IAM
+- [x] Containerized with a distroless image; CI builds and pushes to ECR via OIDC
+- [x] Deployed on ECS Express Mode with a live public URL, `/ingest` and `/query` verified in the cloud
 
 ## Stack
 
@@ -165,15 +202,47 @@ Built local-first, then deployed to AWS. The MVP cut line is the end of Phase 6.
 
 ## Local development
 
+The fastest path is local: Postgres runs in Docker and the Go service runs natively. The whole RAG
+loop works on your laptop in a few commands.
+
+**Prerequisites.** [Go 1.26+](https://go.dev/doc/install), [Docker](https://docs.docker.com/get-docker/),
+and AWS credentials with **Bedrock access**. The service embeds and generates through Amazon Bedrock,
+so even the local run is not fully offline: configure the AWS CLI (`aws configure`) and enable
+[model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html) for Titan
+Text Embeddings V2 and a Claude model in your region.
+
 ```bash
-go run ./cmd/server   # run the service
-go build ./...         # build everything
-go vet ./...           # static checks
-go test ./...          # tests
+# 1. Clone
+git clone https://github.com/Go-Santiago-Go/go-rag-api.git
+cd go-rag-api
+
+# 2. Start Postgres + pgvector (the schema auto-applies on first boot)
+docker compose up -d
+
+# 3. Run the service. It reads AWS credentials from your environment / ~/.aws,
+#    connects to the local database, and listens on :8080.
+go run ./cmd/server
+
+# 4. In another terminal: ingest a document, then ask about it.
+curl -X POST localhost:8080/ingest -H 'Content-Type: application/json' \
+  -d '{"document_id":"doc-1","text":"pgvector stores embeddings inside Postgres."}'
+
+curl -s -X POST localhost:8080/query -H 'Content-Type: application/json' \
+  -d '{"question":"Where does pgvector store embeddings?"}'
+# { "answer": "...", "sources": [ { "content": "...", "document_id": "doc-1", "page": 0 } ] }
+```
+
+Development commands:
+
+```bash
+go build ./...   # build everything
+go vet ./...     # static checks (also runs in CI)
+go test ./...    # tests (also runs in CI)
 ```
 
 CI runs `go build`, `go vet`, and `go test` on every push and pull request, with the Go version
-sourced from `go.mod` so it lives in one place.
+sourced from `go.mod` so it lives in one place. To run the same service on AWS behind a public URL,
+see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Endpoints
 
@@ -182,9 +251,13 @@ sourced from `go.mod` so it lives in one place.
 Makes a document searchable: chunk the text, embed each chunk with Bedrock Titan v2, and store the
 vectors in pgvector. Runs synchronously and returns `201 Created` once every chunk is stored.
 
-The service reads its database connection from `DATABASE_URL` (defaulting to the local
-`docker compose` Postgres) and calls Bedrock, so the machine running it needs AWS credentials with
-Bedrock access and the Titan v2 model enabled in the region.
+The service resolves its database connection in three ways, most specific first: `DATABASE_URL` if
+set (local dev / `docker compose`), otherwise the standard `PG*` vars (`PGHOST`, `PGUSER`,
+`PGPASSWORD`, `PGDATABASE`, `PGSSLMODE`) which pgx reads directly (this is the cloud path, where ECS
+injects `PGPASSWORD` from Secrets Manager), and otherwise a local default. It also applies the schema
+idempotently on startup, so a fresh RDS database becomes usable with no separate migration step. It
+calls Bedrock, so the machine running it needs AWS credentials with Bedrock access and the Titan v2
+model enabled in the region.
 
 ```bash
 docker compose up -d      # start local Postgres + pgvector; schema auto-applies on first boot
@@ -221,8 +294,5 @@ that makes an answer auditable and gives a downstream agent structured data inst
 
 ## Writeups
 
-Build notes and explanations published alongside this project:
-
-- _Wiring CI before you have code to test: a Go + GitHub Actions walkthrough_ (coming soon)
-
-More as the project progresses.
+Build notes and explanations for the decisions behind this project are posted on LinkedIn:
+[christian-santiago-dev](https://www.linkedin.com/in/christian-santiago-dev/).

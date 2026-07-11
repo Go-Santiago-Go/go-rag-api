@@ -30,7 +30,9 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# --- Public tier: reachable from the internet (hosts the ALB and the NAT) ---
+# --- Public tier: reachable from the internet. Hosts the Express Mode load
+# balancer, the NAT gateway, and, because ECS Express Mode couples the load
+# balancer and tasks into one subnet set, the ECS tasks themselves. ---
 # map_public_ip_on_launch gives resources here a public IP. This is one
 # ingredient of "public"; the internet route in pass 3 is the other.
 resource "aws_subnet" "public_a" {
@@ -49,9 +51,13 @@ resource "aws_subnet" "public_b" {
   tags                    = { Name = "go-rag-api-public-b", Tier = "public" }
 }
 
-# --- App tier: private, holds the ECS Fargate task. Outbound only, via NAT. ---
-# No public IP (map_public_ip_on_launch defaults to false), so nothing inbound
-# from the internet can reach the container.
+# --- App tier: private, outbound-only via NAT. Designed to hold the Fargate
+# task, but ECS Express Mode places the service in the PUBLIC subnets (it uses
+# one subnet set for both the load balancer and the tasks, and a public URL
+# needs public subnets). So these subnets and the NAT are provisioned by the
+# three-tier design but currently sit off the request path, the point where a
+# hand-rolled aws_ecs_service would put tasks to keep them fully private. ---
+# No public IP (map_public_ip_on_launch defaults to false).
 resource "aws_subnet" "app_a" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.10.0/24"
@@ -105,8 +111,11 @@ resource "aws_eip" "nat" {
 }
 
 # NAT gateway: the ONE-WAY door. It lives in a PUBLIC subnet and lets private
-# subnets reach out to the internet (Bedrock, image pulls) while blocking any
-# inbound connection. Single NAT in one AZ, per the design note above.
+# subnets reach out to the internet while blocking any inbound connection. It
+# was the egress path for the app when the task was meant to live in the private
+# app tier; with Express Mode running the task in public subnets, the app now
+# egresses straight through the internet gateway, so the NAT is currently unused
+# and a candidate for removal. Single NAT in one AZ, per the design note above.
 resource "aws_nat_gateway" "main" {
   allocation_id = aws_eip.nat.id
   subnet_id     = aws_subnet.public_a.id

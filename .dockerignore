@@ -1,0 +1,30 @@
+# Keep the build context small and free of secrets. Everything here is excluded
+# from `COPY . .`, so it never enters the image or slows the build.
+
+# Version control
+.git
+.gitignore
+
+# Terraform: the provider plugin is ~700MB and the state files contain secrets
+# (e.g. the RDS password). None of it belongs in a Go build.
+infra/
+*.tfstate
+*.tfstate.backup
+
+# Local project instructions and planning docs (not needed to compile).
+CLAUDE.md
+CLAUDE.local.md
+PROJECT1_BUILD_PLAN.md
+PROJECT2_BUILD_PLAN.md
+README.md
+content/
+
+# Docker + CI metadata
+Dockerfile
+.dockerignore
+.github/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store
