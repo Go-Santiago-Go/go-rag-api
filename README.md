@@ -1,16 +1,24 @@
 # go-rag-api
 
 [![ci](https://github.com/Go-Santiago-Go/go-rag-api/actions/workflows/ci.yml/badge.svg)](https://github.com/Go-Santiago-Go/go-rag-api/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A containerized Go service that ingests documents and answers questions about them over HTTP,
-returning grounded answers with structured citations. Retrieval Augmented Generation (RAG) as a
-plain HTTP microservice, built to be consumed by a human, a browser, or an agent.
+**A production-shaped Retrieval Augmented Generation (RAG) service in Go, deployed on AWS.** It runs
+the full RAG pipeline over HTTP (chunking, embedding, vector search, and grounded generation) and
+answers questions with citations back to the source text: `{ answer, sources[] }`.
+
+Retrieval uses Amazon Bedrock embeddings and pgvector similarity search, with storage and model calls
+behind interfaces so the pipeline is unit tested with zero cloud access. The platform side is fully
+infrastructure as code: a multi-tier VPC in Terraform, keyless CI/CD to ECR over GitHub OIDC, and a
+distroless container on ECS Fargate. Built to be consumed by a human, a browser, or an agent.
 
 Two endpoints, one service:
 
-- `POST /ingest` makes a document searchable: chunk it, embed each chunk, store the vectors.
-- `POST /query` answers a question: embed it, similarity search the chunks, have an LLM write a
-  cited answer, and return `{ answer, sources[] }`.
+- `POST /ingest` makes a document searchable: chunk the text, embed each chunk with Bedrock (Titan
+  v2), and persist the vectors in pgvector.
+- `POST /query` answers a question: embed the question with the same model, run a cosine similarity
+  search for the nearest chunks, and have a Claude model write an answer grounded in them, returned
+  as `{ answer, sources[] }`.
 
 > **Deployed:** the full service runs on AWS via ECS Express Mode. `terraform
 > apply` provisions the stack and outputs a public HTTPS URL; a `/query` against it returns grounded
@@ -296,3 +304,7 @@ that makes an answer auditable and gives a downstream agent structured data inst
 
 Build notes and explanations for the decisions behind this project are posted on LinkedIn:
 [christian-santiago-dev](https://www.linkedin.com/in/christian-santiago-dev/).
+
+## License
+
+Released under the [MIT License](LICENSE).
